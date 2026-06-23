@@ -40,9 +40,14 @@ app.post("/gerar-figurinha", async (req, res) => {
     }
 
     const semFundoBuffer = await rbgRes.buffer();
+    console.log("Remove.bg retornou buffer de", semFundoBuffer.length, "bytes");
+    console.log("Primeiros bytes:", semFundoBuffer.slice(0, 4).toString("hex"));
+
+    // Garantir que é PNG válido
+    const semFundoPng = await sharp(semFundoBuffer).png().toBuffer();
 
     console.log("3. Analisando dimensões da foto sem fundo...");
-    const semFundoMeta = await sharp(semFundoBuffer).metadata();
+    const semFundoMeta = await sharp(semFundoPng).metadata();
     console.log(`   Foto sem fundo: ${semFundoMeta.width}x${semFundoMeta.height}`);
 
     // Escala a foto para caber na área do rosto (614px de altura disponível)
@@ -54,7 +59,7 @@ app.post("/gerar-figurinha", async (req, res) => {
     const fotoH = Math.round(semFundoMeta.height * scale);
 
     // Redimensiona foto sem fundo
-    const fotoResized = await sharp(semFundoBuffer)
+    const fotoResized = await sharp(semFundoPng)
       .resize(fotoW, fotoH, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .png()
       .toBuffer();
