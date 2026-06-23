@@ -9,7 +9,7 @@ app.use(express.json({ limit: "20mb" }));
 const PORT = process.env.PORT || 3000;
 const REMOVEBG_API_KEY = process.env.REMOVEBG_API_KEY;
 
-const FUNDO_URL = "https://znnycpkxezeclssqvyhu.supabase.co/storage/v1/object/public/fotos-clientes/base%20sem%20camisa.png";
+const FUNDO_URL = "https://znnycpkxezeclssqvyhu.supabase.co/storage/v1/object/public/fotos-clientes/fundo.png";
 const CAMISA_URL = "https://znnycpkxezeclssqvyhu.supabase.co/storage/v1/object/public/fotos-clientes/camisa.png";
 
 app.get("/health", (req, res) => res.json({ ok: true }));
