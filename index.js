@@ -14,7 +14,12 @@ const CAMISA_URL = "https://znnycpkxezeclssqvyhu.supabase.co/storage/v1/object/p
 
 const CANVAS_W = 1029;
 const CANVAS_H = 1528;
-const COLARINHO_Y = 611;
+
+// Área disponível para a pessoa: topo 60px até 1100px
+const PESSOA_TOPO = 60;
+const PESSOA_BASE = 1100;
+const PESSOA_AREA_H = PESSOA_BASE - PESSOA_TOPO; // 1040px
+const PESSOA_AREA_W = 900;
 
 function escaparXml(str) {
   return String(str || "")
@@ -23,6 +28,21 @@ function escaparXml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+async function gerarTextoPng(texto, largura, altura, fontSize, bold, cor) {
+  const svg = `<svg width="${largura}" height="${altura}" xmlns="http://www.w3.org/2000/svg">
+    <text 
+      x="${largura/2}" 
+      y="${altura * 0.78}" 
+      font-family="sans-serif"
+      font-size="${fontSize}"
+      font-weight="${bold ? 'bold' : 'normal'}"
+      fill="${cor || 'white'}"
+      text-anchor="middle"
+    >${escaparXml(texto)}</text>
+  </svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
 app.get("/health", (req, res) => res.json({ ok: true }));
@@ -83,15 +103,17 @@ app.post("/gerar-figurinha", async (req, res) => {
     const pessoaH = maxY - minY;
     const rostoCentroX = (minX + maxX) / 2;
 
-    // Margem generosa no topo para não cortar cabeça
-    const margemTopo = pessoaH * 0.15;
+    console.log(`   Pessoa: w=${pessoaW}, h=${pessoaH}`);
+
+    // Recortar pessoa inteira com margem no topo
+    const margemTopo = pessoaH * 0.08;
     const recorteY1 = Math.max(0, minY - margemTopo);
-    const recorteY2 = Math.min(imgH, minY + pessoaH * 0.55);
+    const recorteY2 = Math.min(imgH, maxY);
     const recorteH = recorteY2 - recorteY1;
-    const recorteW = Math.min(pessoaW * 1.2, imgW);
+    const recorteW = Math.min(pessoaW * 1.1, imgW);
     const recorteX1 = Math.max(0, Math.round(rostoCentroX - recorteW / 2));
 
-    const bustoBuffer = await sharp(semFundoBuffer)
+    const pessoaRecortadaBuffer = await sharp(semFundoBuffer)
       .extract({
         left: Math.round(recorteX1),
         top: Math.round(recorteY1),
@@ -101,21 +123,25 @@ app.post("/gerar-figurinha", async (req, res) => {
       .png()
       .toBuffer();
 
-    const areaDisponivel = COLARINHO_Y + 280;
-    const areaW = 800;
-    const scaleFinal = Math.min(areaW / recorteW, areaDisponivel / recorteH);
-    const finalW = Math.round(recorteW * scaleFinal);
-    const finalH = Math.round(recorteH * scaleFinal);
+    // Escalar para caber na área disponível mantendo proporção
+    const scaleH = PESSOA_AREA_H / recorteH;
+    const scaleW = PESSOA_AREA_W / recorteW;
+    const scale = Math.min(scaleH, scaleW);
+    const finalW = Math.round(recorteW * scale);
+    const finalH = Math.round(recorteH * scale);
 
-    const bustoResized = await sharp(bustoBuffer)
+    console.log(`   Tamanho final: ${finalW}x${finalH}`);
+
+    const pessoaResized = await sharp(pessoaRecortadaBuffer)
       .resize(finalW, finalH, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .png()
       .toBuffer();
 
+    // Centralizar horizontalmente, alinhar base em PESSOA_BASE
     const fotoLeft = Math.round((CANVAS_W - finalW) / 2);
-    const fotoTop = Math.max(10, COLARINHO_Y - finalH + 280);
+    const fotoTop = PESSOA_BASE - finalH;
 
-    console.log(`   Posicao: left=${fotoLeft}, top=${fotoTop}, w=${finalW}, h=${finalH}`);
+    console.log(`   Posicao: left=${fotoLeft}, top=${fotoTop}`);
 
     console.log("4. Baixando fundo e camisa...");
     const [fundoBuffer, camisaBuffer] = await Promise.all([
@@ -123,32 +149,31 @@ app.post("/gerar-figurinha", async (req, res) => {
       fetch(CAMISA_URL).then(r => r.buffer()),
     ]);
 
-    console.log("5. Montando figurinha...");
+    console.log("5. Gerando textos...");
+    const nomeTxt = String(nome || "").toUpperCase();
+    const timeTxt = String(time || "").toUpperCase();
+    const dataTxt = `${dataNascimento || ""} | ${altura || ""} | ${peso || ""}`;
 
-    const nomeTexto = escaparXml(String(nome || "").toUpperCase());
-    const timeTexto = escaparXml(String(time || "").toUpperCase());
-    const dataTexto = escaparXml(String(dataNascimento || ""));
-    const alturaTexto = escaparXml(String(altura || ""));
-    const pesoTexto = escaparXml(String(peso || ""));
+    const [nomePng, dataPng, timePng] = await Promise.all([
+      gerarTextoPng(nomeTxt, 900, 70, 52, true, "white"),
+      gerarTextoPng(dataTxt, 900, 50, 28, false, "white"),
+      gerarTextoPng(timeTxt, 600, 50, 30, true, "white"),
+    ]);
 
-    // Usar fonte sem-serif genérica compatível com Linux
-    const svgTexto = `<svg width="${CANVAS_W}" height="${CANVAS_H}" xmlns="http://www.w3.org/2000/svg">
-  <text x="514" y="1268" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-weight="bold" font-size="52" fill="white" text-anchor="middle">${nomeTexto}</text>
-  <text x="514" y="1315" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-size="28" fill="white" text-anchor="middle">${dataTexto} | ${alturaTexto} | ${pesoTexto}</text>
-  <text x="340" y="1368" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-weight="bold" font-size="30" fill="white" text-anchor="middle">${timeTexto}</text>
-</svg>`;
-
+    console.log("6. Montando figurinha...");
     const figurinha = await sharp(fundoBuffer)
       .resize(CANVAS_W, CANVAS_H)
       .composite([
-        { input: bustoResized, left: fotoLeft, top: fotoTop },
+        { input: pessoaResized, left: fotoLeft, top: fotoTop },
         { input: camisaBuffer, left: 0, top: 0 },
-        { input: Buffer.from(svgTexto), left: 0, top: 0 },
+        { input: nomePng,  left: Math.round((CANVAS_W - 900) / 2), top: 1190 },
+        { input: dataPng,  left: Math.round((CANVAS_W - 900) / 2), top: 1255 },
+        { input: timePng,  left: Math.round((CANVAS_W - 600) / 2) - 80, top: 1310 },
       ])
       .png()
       .toBuffer();
 
-    console.log("6. Figurinha gerada:", figurinha.length, "bytes OK");
+    console.log("7. Figurinha gerada:", figurinha.length, "bytes OK");
     res.json({ imagemBase64: figurinha.toString("base64"), tipo: "png" });
 
   } catch (err) {
