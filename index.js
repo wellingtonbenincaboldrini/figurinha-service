@@ -12,10 +12,18 @@ const REMOVEBG_API_KEY = process.env.REMOVEBG_API_KEY;
 const FUNDO_URL = "https://znnycpkxezeclssqvyhu.supabase.co/storage/v1/object/public/fotos-clientes/fundo.png";
 const CAMISA_URL = "https://znnycpkxezeclssqvyhu.supabase.co/storage/v1/object/public/fotos-clientes/camisa.png";
 
-// Canvas da figurinha
 const CANVAS_W = 1029;
 const CANVAS_H = 1528;
 const COLARINHO_Y = 611;
+
+function escaparXml(str) {
+  return (str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -75,15 +83,16 @@ app.post("/gerar-figurinha", async (req, res) => {
 
     console.log(`   Pessoa: x=${minX}-${maxX}, y=${minY}-${maxY}, w=${pessoaW}, h=${pessoaH}`);
 
-    // ✅ AJUSTE PRINCIPAL: recortar só rosto + busto (40% da altura total)
-    const recorteY1 = Math.max(0, minY - pessoaH * 0.03); // pequena margem no topo
-    const recorteY2 = Math.min(imgH, minY + pessoaH * 0.40); // só até o peito
+    // Recortar rosto + busto (40% da altura), com margem generosa no topo
+    const margemTopo = pessoaH * 0.08; // 8% de margem acima da cabeça
+    const recorteY1 = Math.max(0, minY - margemTopo);
+    const recorteY2 = Math.min(imgH, minY + pessoaH * 0.45);
     const recorteH = recorteY2 - recorteY1;
 
     const recorteW = Math.min(pessoaW * 1.2, imgW);
     const recorteX1 = Math.max(0, Math.round(rostoCentroX - recorteW / 2));
 
-    console.log(`   Recorte busto: x=${recorteX1}, y=${recorteY1.toFixed(0)}, w=${recorteW.toFixed(0)}, h=${recorteH.toFixed(0)}`);
+    console.log(`   Recorte: x=${recorteX1}, y=${recorteY1.toFixed(0)}, w=${recorteW.toFixed(0)}, h=${recorteH.toFixed(0)}`);
 
     const bustoBuffer = await sharp(semFundoBuffer)
       .extract({
@@ -95,9 +104,9 @@ app.post("/gerar-figurinha", async (req, res) => {
       .png()
       .toBuffer();
 
-    // Escalar para caber bem na área acima do colarinho
-    const areaDisponivel = COLARINHO_Y + 180;
-    const areaW = 680;
+    // Escalar para caber na área disponível
+    const areaDisponivel = COLARINHO_Y + 200;
+    const areaW = 700;
     const scaleFinal = Math.min(areaW / recorteW, areaDisponivel / recorteH);
     const finalW = Math.round(recorteW * scaleFinal);
     const finalH = Math.round(recorteH * scaleFinal);
@@ -109,9 +118,9 @@ app.post("/gerar-figurinha", async (req, res) => {
       .png()
       .toBuffer();
 
-    // Centralizado horizontalmente, base alinhada ao colarinho com sobreposição
+    // Posicionar: centralizado, base alinhada ao colarinho com sobreposição
     const fotoLeft = Math.round((CANVAS_W - finalW) / 2);
-    const fotoTop = Math.max(0, COLARINHO_Y - finalH + 180);
+    const fotoTop = Math.max(0, COLARINHO_Y - finalH + 200);
 
     console.log(`   Posição: left=${fotoLeft}, top=${fotoTop}`);
 
@@ -122,10 +131,16 @@ app.post("/gerar-figurinha", async (req, res) => {
     ]);
 
     console.log("5. Montando figurinha...");
+    const nomeEscapado = escaparXml((nome || "NOME").toUpperCase());
+    const timeEscapado = escaparXml((time || "TIME").toUpperCase());
+    const dataEscapada = escaparXml(dataNascimento || "");
+    const alturaEscapada = escaparXml(altura || "");
+    const pesoEscapado = escaparXml(peso || "");
+
     const svgTexto = `<svg width="${CANVAS_W}" height="${CANVAS_H}" xmlns="http://www.w3.org/2000/svg">
-  <text x="514" y="1268" font-family="Arial Black, Arial" font-weight="900" font-size="50" fill="white" text-anchor="middle">${(nome || "").toUpperCase()}</text>
-  <text x="514" y="1318" font-family="Arial, sans-serif" font-size="30" fill="white" text-anchor="middle">${dataNascimento || ""} | ${altura || ""} | ${peso || ""}</text>
-  <text x="340" y="1372" font-family="Arial Black, Arial" font-weight="900" font-size="30" fill="white" text-anchor="middle">${(time || "").toUpperCase()}</text>
+  <text x="514" y="1268" font-family="Arial Black, Arial" font-weight="900" font-size="50" fill="white" text-anchor="middle">${nomeEscapado}</text>
+  <text x="514" y="1318" font-family="Arial, sans-serif" font-size="30" fill="white" text-anchor="middle">${dataEscapada} | ${alturaEscapada} | ${pesoEscapado}</text>
+  <text x="340" y="1372" font-family="Arial Black, Arial" font-weight="900" font-size="30" fill="white" text-anchor="middle">${timeEscapado}</text>
 </svg>`;
 
     const figurinha = await sharp(fundoBuffer)
