@@ -14,12 +14,11 @@ const CAMISA_URL = "https://znnycpkxezeclssqvyhu.supabase.co/storage/v1/object/p
 
 const CANVAS_W = 1029;
 const CANVAS_H = 1528;
-
-// Área disponível para a pessoa: topo 60px até 1100px
-const PESSOA_TOPO = 60;
-const PESSOA_BASE = 1100;
-const PESSOA_AREA_H = PESSOA_BASE - PESSOA_TOPO; // 1040px
-const PESSOA_AREA_W = 900;
+const GOLA_Y = 611;
+const ROSTO_TOPO = 60;
+const ROSTO_BASE = GOLA_Y + 80; // 691px — sobrepõe levemente na gola
+const ROSTO_H = ROSTO_BASE - ROSTO_TOPO; // 631px
+const ROSTO_W = 700;
 
 function escaparXml(str) {
   return String(str || "")
@@ -30,21 +29,6 @@ function escaparXml(str) {
     .replace(/'/g, "&apos;");
 }
 
-async function gerarTextoPng(texto, largura, altura, fontSize, bold, cor) {
-  const svg = `<svg width="${largura}" height="${altura}" xmlns="http://www.w3.org/2000/svg">
-    <text 
-      x="${largura/2}" 
-      y="${altura * 0.78}" 
-      font-family="sans-serif"
-      font-size="${fontSize}"
-      font-weight="${bold ? 'bold' : 'normal'}"
-      fill="${cor || 'white'}"
-      text-anchor="middle"
-    >${escaparXml(texto)}</text>
-  </svg>`;
-  return sharp(Buffer.from(svg)).png().toBuffer();
-}
-
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 app.post("/gerar-figurinha", async (req, res) => {
@@ -52,13 +36,13 @@ app.post("/gerar-figurinha", async (req, res) => {
     const { fotoUrl, nome, dataNascimento, altura, peso, time } = req.body;
     if (!fotoUrl) return res.status(400).json({ erro: "fotoUrl obrigatorio" });
 
-    console.log("Dados recebidos:", { nome, dataNascimento, altura, peso, time });
+    console.log("Dados:", { nome, dataNascimento, altura, peso, time });
 
-    console.log("1. Baixando foto:", fotoUrl);
-    const fotoRes = await fetch(fotoUrl);
-    const fotoBuffer = await fotoRes.buffer();
+    // 1. Baixar foto
+    const fotoBuffer = await fetch(fotoUrl).then(r => r.buffer());
 
-    console.log("2. Removendo fundo via Remove.bg...");
+    // 2. Remover fundo
+    console.log("Removendo fundo...");
     const form = new FormData();
     form.append("image_file", fotoBuffer, { filename: "foto.jpg", contentType: "image/jpeg" });
     form.append("size", "auto");
@@ -69,28 +53,17 @@ app.post("/gerar-figurinha", async (req, res) => {
       body: form,
     });
 
-    if (!rbgRes.ok) {
-      const err = await rbgRes.text();
-      throw new Error("Remove.bg erro: " + err);
-    }
-
+    if (!rbgRes.ok) throw new Error("Remove.bg erro: " + await rbgRes.text());
     const semFundoBuffer = await rbgRes.buffer();
 
-    console.log("3. Detectando bounding box da pessoa...");
-    const rawData = await sharp(semFundoBuffer)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
+    // 3. Detectar bounding box
+    const { data, info } = await sharp(semFundoBuffer)
+      .ensureAlpha().raw().toBuffer({ resolveWithObject: true });
 
-    const { data, info } = rawData;
-    const imgW = info.width;
-    const imgH = info.height;
-
-    let minX = imgW, maxX = 0, minY = imgH, maxY = 0;
-    for (let y = 0; y < imgH; y++) {
-      for (let x = 0; x < imgW; x++) {
-        const alpha = data[(y * imgW + x) * 4 + 3];
-        if (alpha > 10) {
+    let minX = info.width, maxX = 0, minY = info.height, maxY = 0;
+    for (let y = 0; y < info.height; y++) {
+      for (let x = 0; x < info.width; x++) {
+        if (data[(y * info.width + x) * 4 + 3] > 10) {
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
           if (y < minY) minY = y;
@@ -101,79 +74,63 @@ app.post("/gerar-figurinha", async (req, res) => {
 
     const pessoaW = maxX - minX;
     const pessoaH = maxY - minY;
-    const rostoCentroX = (minX + maxX) / 2;
+    const centroX = (minX + maxX) / 2;
 
-    console.log(`   Pessoa: w=${pessoaW}, h=${pessoaH}`);
-
-    // Recortar pessoa inteira com margem no topo
+    // 4. Recortar só rosto+busto (topo com margem até ~50% da pessoa)
     const margemTopo = pessoaH * 0.08;
-    const recorteY1 = Math.max(0, minY - margemTopo);
-    const recorteY2 = Math.min(imgH, maxY);
+    const recorteY1 = Math.max(0, Math.round(minY - margemTopo));
+    const recorteY2 = Math.min(info.height, Math.round(minY + pessoaH * 0.55));
     const recorteH = recorteY2 - recorteY1;
-    const recorteW = Math.min(pessoaW * 1.1, imgW);
-    const recorteX1 = Math.max(0, Math.round(rostoCentroX - recorteW / 2));
+    const recorteW = Math.min(Math.round(pessoaW * 1.1), info.width);
+    const recorteX1 = Math.max(0, Math.round(centroX - recorteW / 2));
 
-    const pessoaRecortadaBuffer = await sharp(semFundoBuffer)
-      .extract({
-        left: Math.round(recorteX1),
-        top: Math.round(recorteY1),
-        width: Math.round(recorteW),
-        height: Math.round(recorteH),
-      })
-      .png()
-      .toBuffer();
+    const bustoBuffer = await sharp(semFundoBuffer)
+      .extract({ left: recorteX1, top: recorteY1, width: recorteW, height: recorteH })
+      .png().toBuffer();
 
-    // Escalar para caber na área disponível mantendo proporção
-    const scaleH = PESSOA_AREA_H / recorteH;
-    const scaleW = PESSOA_AREA_W / recorteW;
-    const scale = Math.min(scaleH, scaleW);
+    // 5. Escalar para caber exatamente na área do rosto (ROSTO_W x ROSTO_H)
+    const scale = Math.min(ROSTO_W / recorteW, ROSTO_H / recorteH);
     const finalW = Math.round(recorteW * scale);
     const finalH = Math.round(recorteH * scale);
 
-    console.log(`   Tamanho final: ${finalW}x${finalH}`);
-
-    const pessoaResized = await sharp(pessoaRecortadaBuffer)
+    const bustoResized = await sharp(bustoBuffer)
       .resize(finalW, finalH, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .png()
-      .toBuffer();
+      .png().toBuffer();
 
-    // Centralizar horizontalmente, alinhar base em PESSOA_BASE
+    // Centralizar horizontalmente, base alinhada em ROSTO_BASE
     const fotoLeft = Math.round((CANVAS_W - finalW) / 2);
-    const fotoTop = PESSOA_BASE - finalH;
+    const fotoTop = ROSTO_BASE - finalH;
 
-    console.log(`   Posicao: left=${fotoLeft}, top=${fotoTop}`);
+    console.log(`Pessoa: left=${fotoLeft}, top=${fotoTop}, w=${finalW}, h=${finalH}`);
 
-    console.log("4. Baixando fundo e camisa...");
+    // 6. Baixar fundo e camisa
     const [fundoBuffer, camisaBuffer] = await Promise.all([
       fetch(FUNDO_URL).then(r => r.buffer()),
       fetch(CAMISA_URL).then(r => r.buffer()),
     ]);
 
-    console.log("5. Gerando textos...");
-    const nomeTxt = String(nome || "").toUpperCase();
-    const timeTxt = String(time || "").toUpperCase();
-    const dataTxt = `${dataNascimento || ""} | ${altura || ""} | ${peso || ""}`;
+    // 7. Gerar textos via SVG
+    const nomeTexto = escaparXml(String(nome || "").toUpperCase());
+    const timeTexto = escaparXml(String(time || "").toUpperCase());
+    const dataTexto = escaparXml(`${dataNascimento || ""} | ${altura || ""} | ${peso || ""}`);
 
-    const [nomePng, dataPng, timePng] = await Promise.all([
-      gerarTextoPng(nomeTxt, 900, 70, 52, true, "white"),
-      gerarTextoPng(dataTxt, 900, 50, 28, false, "white"),
-      gerarTextoPng(timeTxt, 600, 50, 30, true, "white"),
-    ]);
+    const svgTextos = `<svg width="${CANVAS_W}" height="${CANVAS_H}" xmlns="http://www.w3.org/2000/svg">
+      <text x="514" y="1255" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-weight="bold" font-size="52" fill="white" text-anchor="middle">${nomeTexto}</text>
+      <text x="514" y="1300" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-size="28" fill="white" text-anchor="middle">${dataTexto}</text>
+      <text x="360" y="1355" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-weight="bold" font-size="30" fill="white" text-anchor="middle">${timeTexto}</text>
+    </svg>`;
 
-    console.log("6. Montando figurinha...");
+    // 8. Montar: fundo → pessoa → camisa → textos
     const figurinha = await sharp(fundoBuffer)
       .resize(CANVAS_W, CANVAS_H)
       .composite([
-        { input: pessoaResized, left: fotoLeft, top: fotoTop },
+        { input: bustoResized, left: fotoLeft, top: fotoTop },
         { input: camisaBuffer, left: 0, top: 0 },
-        { input: nomePng,  left: Math.round((CANVAS_W - 900) / 2), top: 1190 },
-        { input: dataPng,  left: Math.round((CANVAS_W - 900) / 2), top: 1255 },
-        { input: timePng,  left: Math.round((CANVAS_W - 600) / 2) - 80, top: 1310 },
+        { input: Buffer.from(svgTextos), left: 0, top: 0 },
       ])
-      .png()
-      .toBuffer();
+      .png().toBuffer();
 
-    console.log("7. Figurinha gerada:", figurinha.length, "bytes OK");
+    console.log("Figurinha gerada:", figurinha.length, "bytes OK");
     res.json({ imagemBase64: figurinha.toString("base64"), tipo: "png" });
 
   } catch (err) {
@@ -182,4 +139,4 @@ app.post("/gerar-figurinha", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
