@@ -2,8 +2,6 @@ const express = require("express");
 const sharp = require("sharp");
 const fetch = require("node-fetch");
 const FormData = require("form-data");
-const path = require("path");
-const fs = require("fs");
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
@@ -17,7 +15,7 @@ const CAMISA_URL = "https://znnycpkxezeclssqvyhu.supabase.co/storage/v1/object/p
 // Canvas da figurinha
 const CANVAS_W = 1029;
 const CANVAS_H = 1528;
-const COLARINHO_Y = 611; // onde começa a camisa
+const COLARINHO_Y = 611;
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -29,7 +27,6 @@ app.post("/gerar-figurinha", async (req, res) => {
     console.log("1. Baixando foto:", fotoUrl);
     const fotoRes = await fetch(fotoUrl);
     const fotoBuffer = await fotoRes.buffer();
-    console.log("   Tamanho:", fotoBuffer.length, "bytes");
 
     console.log("2. Removendo fundo via Remove.bg...");
     const form = new FormData();
@@ -42,23 +39,14 @@ app.post("/gerar-figurinha", async (req, res) => {
       body: form,
     });
 
-    console.log("   Remove.bg status:", rbgRes.status);
     if (!rbgRes.ok) {
       const err = await rbgRes.text();
       throw new Error("Remove.bg erro: " + err);
     }
 
     const semFundoBuffer = await rbgRes.buffer();
-    console.log("   Sem fundo:", semFundoBuffer.length, "bytes");
 
-    // Obter dimensões originais da foto sem fundo
-    const semFundoMeta = await sharp(semFundoBuffer).metadata();
-    console.log("   Dimensões sem fundo:", semFundoMeta.width, "x", semFundoMeta.height);
-
-    console.log("3. Detectando rosto com Sharp...");
-    
-    // Estratégia: analisar onde estão os pixels não-transparentes no terço superior
-    // para encontrar a região do rosto
+    console.log("3. Detectando bounding box da pessoa...");
     const rawData = await sharp(semFundoBuffer)
       .ensureAlpha()
       .raw()
@@ -68,7 +56,6 @@ app.post("/gerar-figurinha", async (req, res) => {
     const imgW = info.width;
     const imgH = info.height;
 
-    // Encontrar bounding box dos pixels visíveis (alpha > 10)
     let minX = imgW, maxX = 0, minY = imgH, maxY = 0;
     for (let y = 0; y < imgH; y++) {
       for (let x = 0; x < imgW; x++) {
@@ -82,31 +69,22 @@ app.post("/gerar-figurinha", async (req, res) => {
       }
     }
 
-    console.log(`   Pessoa detectada: x=${minX}-${maxX}, y=${minY}-${maxY}`);
     const pessoaW = maxX - minX;
     const pessoaH = maxY - minY;
-
-    // Estimar posição do rosto: ~20% do topo da pessoa até ~40% da altura
-    const rostoY1 = minY + pessoaH * 0.00;
-    const rostoY2 = minY + pessoaH * 0.35;
-    const rostoH = rostoY2 - rostoY1;
     const rostoCentroX = (minX + maxX) / 2;
-    const rostoCentroY = (rostoY1 + rostoY2) / 2;
 
-    console.log(`   Rosto estimado: centroX=${rostoCentroX.toFixed(0)}, centroY=${rostoCentroY.toFixed(0)}`);
+    console.log(`   Pessoa: x=${minX}-${maxX}, y=${minY}-${maxY}, w=${pessoaW}, h=${pessoaH}`);
 
-    // Definir área de recorte: rosto + busto (do topo da pessoa até ~65% da altura)
-    const recorteY1 = Math.max(0, minY - pessoaH * 0.05);
-    const recorteY2 = Math.min(imgH, minY + pessoaH * 0.65);
+    // ✅ AJUSTE PRINCIPAL: recortar só rosto + busto (40% da altura total)
+    const recorteY1 = Math.max(0, minY - pessoaH * 0.03); // pequena margem no topo
+    const recorteY2 = Math.min(imgH, minY + pessoaH * 0.40); // só até o peito
     const recorteH = recorteY2 - recorteY1;
 
-    // Centralizar horizontalmente em torno do centro da pessoa
-    const recorteW = Math.min(pessoaW * 1.3, imgW);
+    const recorteW = Math.min(pessoaW * 1.2, imgW);
     const recorteX1 = Math.max(0, Math.round(rostoCentroX - recorteW / 2));
 
-    console.log(`   Recorte: x=${recorteX1}, y=${recorteY1.toFixed(0)}, w=${recorteW.toFixed(0)}, h=${recorteH.toFixed(0)}`);
+    console.log(`   Recorte busto: x=${recorteX1}, y=${recorteY1.toFixed(0)}, w=${recorteW.toFixed(0)}, h=${recorteH.toFixed(0)}`);
 
-    // Recortar região rosto+busto
     const bustoBuffer = await sharp(semFundoBuffer)
       .extract({
         left: Math.round(recorteX1),
@@ -117,9 +95,9 @@ app.post("/gerar-figurinha", async (req, res) => {
       .png()
       .toBuffer();
 
-    // Escalar para caber na área disponível acima do colarinho
-    const areaDisponivel = COLARINHO_Y + 150; // com sobreposição na camisa
-    const areaW = 700;
+    // Escalar para caber bem na área acima do colarinho
+    const areaDisponivel = COLARINHO_Y + 180;
+    const areaW = 680;
     const scaleFinal = Math.min(areaW / recorteW, areaDisponivel / recorteH);
     const finalW = Math.round(recorteW * scaleFinal);
     const finalH = Math.round(recorteH * scaleFinal);
@@ -131,18 +109,17 @@ app.post("/gerar-figurinha", async (req, res) => {
       .png()
       .toBuffer();
 
-    // Posicionar: centralizado horizontalmente, base alinhada ao colarinho
+    // Centralizado horizontalmente, base alinhada ao colarinho com sobreposição
     const fotoLeft = Math.round((CANVAS_W - finalW) / 2);
-    const fotoTop = Math.max(0, COLARINHO_Y - finalH + 150);
+    const fotoTop = Math.max(0, COLARINHO_Y - finalH + 180);
 
-    console.log(`   Posição final: left=${fotoLeft}, top=${fotoTop}`);
+    console.log(`   Posição: left=${fotoLeft}, top=${fotoTop}`);
 
     console.log("4. Baixando fundo e camisa...");
     const [fundoBuffer, camisaBuffer] = await Promise.all([
       fetch(FUNDO_URL).then(r => r.buffer()),
       fetch(CAMISA_URL).then(r => r.buffer()),
     ]);
-    console.log("   Fundo:", fundoBuffer.length, "bytes | Camisa:", camisaBuffer.length, "bytes");
 
     console.log("5. Montando figurinha...");
     const svgTexto = `<svg width="${CANVAS_W}" height="${CANVAS_H}" xmlns="http://www.w3.org/2000/svg">
