@@ -83,10 +83,10 @@ app.post("/gerar-figurinha", async (req, res) => {
     const pessoaH = maxY - minY;
     const rostoCentroX = (minX + maxX) / 2;
 
-    // Recortar rosto + busto com margem generosa no topo
-    const margemTopo = pessoaH * 0.10;
+    // Margem generosa no topo para não cortar cabeça
+    const margemTopo = pessoaH * 0.15;
     const recorteY1 = Math.max(0, minY - margemTopo);
-    const recorteY2 = Math.min(imgH, minY + pessoaH * 0.50);
+    const recorteY2 = Math.min(imgH, minY + pessoaH * 0.55);
     const recorteH = recorteY2 - recorteY1;
     const recorteW = Math.min(pessoaW * 1.2, imgW);
     const recorteX1 = Math.max(0, Math.round(rostoCentroX - recorteW / 2));
@@ -101,9 +101,8 @@ app.post("/gerar-figurinha", async (req, res) => {
       .png()
       .toBuffer();
 
-    // Escalar para caber bem na figurinha
-    const areaDisponivel = COLARINHO_Y + 250;
-    const areaW = 750;
+    const areaDisponivel = COLARINHO_Y + 280;
+    const areaW = 800;
     const scaleFinal = Math.min(areaW / recorteW, areaDisponivel / recorteH);
     const finalW = Math.round(recorteW * scaleFinal);
     const finalH = Math.round(recorteH * scaleFinal);
@@ -113,9 +112,8 @@ app.post("/gerar-figurinha", async (req, res) => {
       .png()
       .toBuffer();
 
-    // Posicionar: centralizado, topo a partir de 30px do início
     const fotoLeft = Math.round((CANVAS_W - finalW) / 2);
-    const fotoTop = Math.max(30, COLARINHO_Y - finalH + 250);
+    const fotoTop = Math.max(10, COLARINHO_Y - finalH + 280);
 
     console.log(`   Posicao: left=${fotoLeft}, top=${fotoTop}, w=${finalW}, h=${finalH}`);
 
@@ -133,12 +131,11 @@ app.post("/gerar-figurinha", async (req, res) => {
     const alturaTexto = escaparXml(String(altura || ""));
     const pesoTexto = escaparXml(String(peso || ""));
 
-    console.log("Textos SVG:", { nomeTexto, timeTexto, dataTexto });
-
+    // Usar fonte sem-serif genérica compatível com Linux
     const svgTexto = `<svg width="${CANVAS_W}" height="${CANVAS_H}" xmlns="http://www.w3.org/2000/svg">
-  <text x="514" y="1268" font-family="Arial Black, Arial" font-weight="900" font-size="50" fill="white" text-anchor="middle">${nomeTexto}</text>
-  <text x="514" y="1318" font-family="Arial, sans-serif" font-size="30" fill="white" text-anchor="middle">${dataTexto} | ${alturaTexto} | ${pesoTexto}</text>
-  <text x="340" y="1372" font-family="Arial Black, Arial" font-weight="900" font-size="30" fill="white" text-anchor="middle">${timeTexto}</text>
+  <text x="514" y="1268" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-weight="bold" font-size="52" fill="white" text-anchor="middle">${nomeTexto}</text>
+  <text x="514" y="1315" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-size="28" fill="white" text-anchor="middle">${dataTexto} | ${alturaTexto} | ${pesoTexto}</text>
+  <text x="340" y="1368" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-weight="bold" font-size="30" fill="white" text-anchor="middle">${timeTexto}</text>
 </svg>`;
 
     const figurinha = await sharp(fundoBuffer)
